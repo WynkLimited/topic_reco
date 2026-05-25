@@ -51,27 +51,27 @@ def load_spark_parquet(base_path, date):
     return df
 
 
-# def load_spark_parquet_recent(base_path, date):
-#     start_date = datetime.strptime(date, "%Y-%m-%d")
+def load_spark_parquet_recent(base_path, date):
+    start_date = datetime.strptime(date, "%Y-%m-%d")
 
-#     valid_paths = []
-#     for i in range(15):
-#         path = f"{base_path}/day={(start_date - timedelta(days=i)).strftime('%Y-%m-%d')}/"
-#         try:
-#             spark.read.parquet(path).limit(1)  
-#             valid_paths.append(path)
-#         except AnalysisException:
-#             pass  
+    valid_paths = []
+    for i in range(15):
+        path = f"{base_path}/day={(start_date - timedelta(days=i)).strftime('%Y-%m-%d')}/"
+        try:
+            spark.read.parquet(path).limit(1)  
+            valid_paths.append(path)
+        except AnalysisException:
+            pass  
 
-#     df = spark.read.parquet(*valid_paths)
-#     return df
+    df = spark.read.parquet(*valid_paths)
+    return df
     
 d_date = subtractDays(2)
 
 base_path = "gs://wynk-ml-workspace/projects/rails_reranking/user_watch_history_new/v1"
 watch_df = load_spark_parquet(base_path, d_date).cache()  
 
-# watch_df_recent = load_spark_parquet_recent(base_path, d_date).cache()  
+watch_df_recent = load_spark_parquet_recent(base_path, d_date).cache()  
 
 movie_df = spark.read.parquet(f'gs://wynk-ml-workspace/projects/xstream_nlu/catalog-db/{d_date}/enriched_movie.parquet')
 tv_df = spark.read.parquet(f'gs://wynk-ml-workspace/projects/xstream_nlu/catalog-db/{d_date}/enriched_tv.parquet')
@@ -161,18 +161,18 @@ user_items_full_df = (
     .distinct()
 )
 
-# # LAST 15 DAYS
-# user_items_recent_df = (
-#     watch_df_recent
-#     .withColumn("ID", F.explode(F.col(ITEM_COLUMN)))
-#     .select(F.col(UID_COLUMN).alias("uid"), "ID")
-#     .distinct()
-# )
+# LAST 15 DAYS
+user_items_recent_df = (
+    watch_df_recent
+    .withColumn("ID", F.explode(F.col(ITEM_COLUMN)))
+    .select(F.col(UID_COLUMN).alias("uid"), "ID")
+    .distinct()
+)
 
 # Join with content
 user_content_full_df = user_items_full_df.join(filtered_content_df, on="ID", how="inner")
 
-# user_content_recent_df = user_items_recent_df.join(filtered_content_df, on="ID", how="inner")
+user_content_recent_df = user_items_recent_df.join(filtered_content_df, on="ID", how="inner")
 
 tf_full_df = (
     user_content_full_df
@@ -180,11 +180,11 @@ tf_full_df = (
     .agg(F.count("*").alias("tf"))
 )
 
-# tf_recent_df = (
-#     user_content_recent_df
-#     .groupBy("uid", "L2Tag")
-#     .agg(F.count("*").alias("tf"))
-# )
+tf_recent_df = (
+    user_content_recent_df
+    .groupBy("uid", "L2Tag")
+    .agg(F.count("*").alias("tf"))
+)
 
 def compute_tfidf(l2tag, tf):
     try:
@@ -196,19 +196,19 @@ def compute_tfidf(l2tag, tf):
 tfidf_udf = F.udf(compute_tfidf, "double")
 
 tfidf_full_df = tf_full_df.withColumn("tfidf", tfidf_udf(F.col("L2Tag"), F.col("tf")))
-# tfidf_recent_df = tf_recent_df.withColumn("tfidf", tfidf_udf(F.col("L2Tag"), F.col("tf")))
+tfidf_recent_df = tf_recent_df.withColumn("tfidf", tfidf_udf(F.col("L2Tag"), F.col("tf")))
 
 window_spec = Window.partitionBy("uid").orderBy(F.desc("tfidf"))
 
 rank_full_df = tfidf_full_df.withColumn("rank", F.row_number().over(window_spec))
-# rank_recent_df = tfidf_recent_df.withColumn("rank", F.row_number().over(window_spec))
+rank_recent_df = tfidf_recent_df.withColumn("rank", F.row_number().over(window_spec))
 
-# recent_top3 = (
-#     rank_recent_df
-#     .filter(F.col("rank") <= 3)
-#     .groupBy("uid")
-#     .agg(F.collect_list("L2Tag").alias("recent_tags"))
-# )
+recent_top3 = (
+    rank_recent_df
+    .filter(F.col("rank") <= 3)
+    .groupBy("uid")
+    .agg(F.collect_list("L2Tag").alias("recent_tags"))
+)
 full_topN = (
     rank_full_df
     .filter(F.col("rank") <= 15)
@@ -236,34 +236,25 @@ top2_people = (
 
 combined_tags = (
     full_topN
-    # .join(recent_top3, on="uid", how="left")
+    .join(recent_top3, on="uid", how="left")
     .join(top2_people, on="uid", how="left")
     
     # Remove overlap from full tags
-    # .withColumn(
-    #     "filtered_full_tags",
-    #     F.expr("array_except(full_tags, recent_tags)")
-    # )
+    .withColumn(
+        "filtered_full_tags",
+        F.expr("array_except(full_tags, recent_tags)")
+    )
     
     # Take top 5 from remaining
-    # .withColumn(
-    #     "top5_full",
-    #     F.expr("slice(filtered_full_tags, 1, 5)")
-    # )
-
     .withColumn(
         "top5_full",
-        F.expr("slice(full_tags, 1, 8)")
+        F.expr("slice(filtered_full_tags, 1, 5)")
     )
     
     # Final 10 tags
-    # .withColumn(
-    #     "final_tags",
-    #     F.expr("concat(recent_tags, top5_full, people_tags)")
-    # )
     .withColumn(
         "final_tags",
-        F.expr("concat(top5_full, people_tags)")
+        F.expr("concat(recent_tags, top5_full, people_tags)")
     )
     
     .select("uid", "final_tags")
@@ -349,7 +340,7 @@ final_output_df = (
         F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
          .otherwise(F.lit("People"))
     )
-    .withColumn("model", F.lit("TF-IDF"))
+    .withColumn("model", F.lit("Recency TF-IDF"))
     .withColumn("version", F.lit("v1"))
 )
 
@@ -366,7 +357,8 @@ final_output_df = final_output_df.select(
     "version"
 )
 
-final_output_path = f"gs://wynk-ml-workspace/ritika/uid_topic_output/{d_date}/"
+
+final_output_path = f"gs://wynk-ml-workspace/ritika/uid_topic_recency_output/{d_date}/"
 
 (
     final_output_df

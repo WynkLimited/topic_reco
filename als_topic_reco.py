@@ -100,7 +100,7 @@ db = client[mongo_db]
 topics_coll = db['topics']
 
 cursor = topics_coll.find(
-    {"published_count": {"$gt": 10}},  
+    {"published_count": {"$gt": 0}},  
     {"_id": 0, "name": 1}  
 )
 
@@ -245,12 +245,86 @@ final_df = df_top10.groupBy("userId").agg(
     F.collect_list("tag").alias("tags")
 )
 
-output_path = f"gs://wynk-ml-workspace/ritika/als_uid_topic_output/{d_date}/"
+# output_path = f"gs://wynk-ml-workspace/ritika/als_uid_topic_output/{d_date}/"
+
+# (
+#     final_df
+#     .repartition(200)  
+#     .write
+#     .mode("overwrite")
+#     .parquet(output_path)
+# )
+
+# LOAD TAG METADATA FROM MONGO
+
+tag_meta_coll = db["l2_tags_new"]   
+
+tag_cursor = tag_meta_coll.find(
+    {},
+    {
+        "_id": 1,
+        "name": 1,
+        "type": 1,
+        "category": 1,
+        "parent_id": 1
+    }
+)
+
+tag_meta_data = list(tag_cursor)
+
+# Create Spark DF
+tag_meta_df = spark.createDataFrame(tag_meta_data)
+
+# Rename columns properly
+tag_meta_df = (
+    tag_meta_df
+    .withColumnRenamed("_id", "tag_id")
+    .withColumnRenamed("name", "tag_name")
+)
+
+# EXPLODE USER TAGS
+
+user_tags_exploded = final_df.select(
+    F.col("userId").alias("user_id"),
+    F.explode("tags").alias("tag_name")
+)
+
+# JOIN WITH TAG METADATA
+
+final_output_df = (
+    user_tags_exploded
+    .join(tag_meta_df, on="tag_name", how="left")
+    .withColumn(
+        "type",
+        F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
+         .otherwise(F.lit("People"))
+    )
+    .withColumn("model", F.lit("ALS"))
+    .withColumn("version", F.lit("v1"))
+)
+
+# FINAL COLUMN ORDER
+
+final_output_df = final_output_df.select(
+    "tag_id",
+    "user_id",
+    "tag_name",
+    "type",
+    "category",
+    "parent_id",
+    "model",
+    "version"
+)
+
+
+# WRITE OUTPUT
+
+final_output_path = f"gs://wynk-ml-workspace/ritika/als_uid_topic/{d_date}/"
 
 (
-    final_df
-    .repartition(200)  
+    final_output_df
+    .repartition(200)
     .write
     .mode("overwrite")
-    .parquet(output_path)
+    .parquet(final_output_path)
 )
