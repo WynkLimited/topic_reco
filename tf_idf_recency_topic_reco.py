@@ -380,12 +380,21 @@ final_output_df = final_output_df.select(
 )
 
 
-final_output_path = f"gs://wynk-ml-workspace/projects/neuralflix/user-topic-dump/tfidf_recency_recos/day={d_date}/"
+final_output_path = f"gs://wynk-ml-workspace/projects/neuralflix/user-topic-dump/day={d_date}/"
+
+# (
+#     final_output_df
+#     .repartition(200)
+#     .write
+#     .mode("overwrite")
+#     .parquet(final_output_path)
+# )
 
 (
     final_output_df
-    .repartition(200)
     .write
-    .mode("overwrite")
+    .mode("append")
+    .partitionBy("model")   
     .parquet(final_output_path)
 )
+
