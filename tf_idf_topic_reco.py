@@ -49,29 +49,11 @@ def load_spark_parquet(base_path, date):
 
     df = spark.read.parquet(*valid_paths)
     return df
-
-
-# def load_spark_parquet_recent(base_path, date):
-#     start_date = datetime.strptime(date, "%Y-%m-%d")
-
-#     valid_paths = []
-#     for i in range(15):
-#         path = f"{base_path}/day={(start_date - timedelta(days=i)).strftime('%Y-%m-%d')}/"
-#         try:
-#             spark.read.parquet(path).limit(1)  
-#             valid_paths.append(path)
-#         except AnalysisException:
-#             pass  
-
-#     df = spark.read.parquet(*valid_paths)
-#     return df
     
-d_date = subtractDays(3)
+d_date = subtractDays(1)
 
 base_path = "gs://wynk-ml-workspace/projects/rails_reranking/user_watch_history_new/v1"
-watch_df = load_spark_parquet(base_path, d_date).cache()  
-
-# watch_df_recent = load_spark_parquet_recent(base_path, d_date).cache()  
+watch_df = load_spark_parquet(base_path, d_date).cache()   
 
 movie_df = spark.read.parquet(f'gs://wynk-ml-workspace/projects/xstream_nlu/catalog-db/{d_date}/enriched_movie.parquet')
 tv_df = spark.read.parquet(f'gs://wynk-ml-workspace/projects/xstream_nlu/catalog-db/{d_date}/enriched_tv.parquet')
@@ -110,18 +92,6 @@ mongo_string = get_mongo_string(mongo_host, mongo_port, mongo_user, mongo_passwo
 client = MongoClient(mongo_string)  
 db = client[mongo_db] 
 
-# l2_coll = db['l2_tags_v2']
-
-# cursor = l2_coll.find(
-#     {
-#         "publish_count_contents": {"$gt": 10},
-#         "is_hero_tag": True  # Filters for hero tags only
-#     }, 
-#     {"_id": 0, "name": 1}
-# )
-
-# l2_tag_names = [doc["name"] for doc in cursor]
-
 topics_coll = db['topics']
 
 cursor = topics_coll.find(
@@ -140,7 +110,6 @@ topics_people_names = [doc["name"] for doc in cursor2]
 print(f"L2 tags with publish_count > 10: {len(topics_tag_names)}")
 print(f"People with publish_count > 0: {len(topics_people_names)}")
 
-# filtered_content_df = content_df.filter(F.col("L2Tag").isin(l2_tag_names))
 filtered_content_df = content_df.filter(F.col("L2Tag").isin(topics_tag_names))
 filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_people_names))
 # filtered_content_df.show(truncate=False)
@@ -170,30 +139,14 @@ user_items_full_df = (
     .distinct()
 )
 
-# # LAST 15 DAYS
-# user_items_recent_df = (
-#     watch_df_recent
-#     .withColumn("ID", F.explode(F.col(ITEM_COLUMN)))
-#     .select(F.col(UID_COLUMN).alias("uid"), "ID")
-#     .distinct()
-# )
-
 # Join with content
 user_content_full_df = user_items_full_df.join(filtered_content_df, on="ID", how="inner")
-
-# user_content_recent_df = user_items_recent_df.join(filtered_content_df, on="ID", how="inner")
 
 tf_full_df = (
     user_content_full_df
     .groupBy("uid", "L2Tag")
     .agg(F.count("*").alias("tf"))
 )
-
-# tf_recent_df = (
-#     user_content_recent_df
-#     .groupBy("uid", "L2Tag")
-#     .agg(F.count("*").alias("tf"))
-# )
 
 def compute_tfidf(l2tag, tf):
     try:
@@ -205,26 +158,10 @@ def compute_tfidf(l2tag, tf):
 tfidf_udf = F.udf(compute_tfidf, "double")
 
 tfidf_full_df = tf_full_df.withColumn("tfidf", tfidf_udf(F.col("L2Tag"), F.col("tf")))
-# tfidf_recent_df = tf_recent_df.withColumn("tfidf", tfidf_udf(F.col("L2Tag"), F.col("tf")))
 
 window_spec = Window.partitionBy("uid").orderBy(F.desc("tfidf"))
 
 rank_full_df = tfidf_full_df.withColumn("rank", F.row_number().over(window_spec))
-# rank_recent_df = tfidf_recent_df.withColumn("rank", F.row_number().over(window_spec))
-
-# recent_top3 = (
-#     rank_recent_df
-#     .filter(F.col("rank") <= 3)
-#     .groupBy("uid")
-#     .agg(F.collect_list("L2Tag").alias("recent_tags"))
-# )
-
-# full_topN = (
-#     rank_full_df
-#     .filter(F.col("rank") <= 15)
-#     .groupBy("uid")
-#     .agg(F.collect_list("L2Tag").alias("full_tags"))
-# )
 
 full_topN = (
     rank_full_df
@@ -260,36 +197,13 @@ top2_people = (
 
 combined_tags = (
     full_topN
-    # .join(recent_top3, on="uid", how="left")
     .join(top2_people, on="uid", how="left")
-    
-    # Remove overlap from full tags
-    # .withColumn(
-    #     "filtered_full_tags",
-    #     F.expr("array_except(full_tags, recent_tags)")
-    # )
-    
-    # Take top 5 from remaining
-    # .withColumn(
-    #     "top5_full",
-    #     F.expr("slice(filtered_full_tags, 1, 5)")
-    # )
 
     .withColumn(
         "top5_full",
         F.expr("slice(full_tags, 1, 8)")
     )
     
-    # Final 10 tags
-    # .withColumn(
-    #     "final_tags",
-    #     F.expr("concat(recent_tags, top5_full, people_tags)")
-    # )
-    # .withColumn(
-    #     "final_tags",
-    #     F.expr("concat(top5_full, people_tags)")
-    # )
-
     # Convert people tags into same struct format
     .withColumn(
         "people_struct",
@@ -312,19 +226,6 @@ combined_tags = (
     .select("uid", "final_tags")
 )
 
-# combined_tags = (
-#     full_top5.join(recent_top2, on="uid", how="left")
-#     .withColumn(
-#         "remaining_tags",
-#         F.expr("slice(array_except(full_tags, recent_tags),1,3)")
-#     )
-#     .withColumn(
-#         "top5_topic",
-#         F.expr("concat(recent_tags, remaining_tags)")
-#     )
-#     .select("uid", "top5_topic")
-# )
-
 user_meta_df = (
     user_content_full_df
     .groupBy("uid")
@@ -337,20 +238,6 @@ user_meta_df = (
 final_df = user_meta_df.join(combined_tags, on="uid", how="left")
 
 final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
-
-# output_path = f"gs://wynk-ml-workspace/ritika/uid_topic_output/{d_date}/"
-
-# (
-#     final_df
-#     .repartition(200) 
-#     .write
-#     .mode("overwrite")
-#     .parquet(output_path)
-# )
-
-# print(f" Parquet written to {output_path}")
-
-# tag_meta_coll = db["l2_tags"]   
 
 tag_cursor = topics_coll.find(
     {},
@@ -378,12 +265,6 @@ tag_meta_df = (
 )
 
 # EXPLODE USER TAGS
-
-# user_tags_exploded = final_df.select(
-#     F.col("uid").alias("user_id"),
-#     F.explode("final_tags").alias("tag_name")
-# )
-
 user_tags_exploded = final_df.select(
     F.col("uid").alias("user_id"),
     F.explode("final_tags").alias("tag_data")
@@ -394,21 +275,14 @@ user_tags_exploded = final_df.select(
 )
 
 # JOIN WITH TAG METADATA
-
 final_output_df = (
     user_tags_exploded
     .join(tag_meta_df, on="tag_name", how="left")
-    # .withColumn(
-    #     "type",
-    #     F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
-    #      .otherwise(F.lit("People"))
-    # )
     .withColumn("model", F.lit("TF-IDF"))
     .withColumn("version", F.lit("v1"))
 )
 
 # FINAL COLUMN ORDER
-
 final_output_df = final_output_df.select(
     "tag_id",
     "user_id",
@@ -421,7 +295,7 @@ final_output_df = final_output_df.select(
     "version"
 )
 
-final_output_path = f"gs://wynk-ml-workspace/ritika/uid_topic_output/{d_date}/"
+final_output_path = f"gs://wynk-ml-workspace/xstream/TopicRecos/tfidf_recos/{d_date}/"
 
 (
     final_output_df

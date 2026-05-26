@@ -52,7 +52,7 @@ def load_spark_parquet(base_path, date):
     df = spark.read.parquet(*valid_paths)
     return df
 
-d_date = subtractDays(3)
+d_date = subtractDays(1)
 
 base_path = "gs://wynk-ml-workspace/projects/rails_reranking/user_watch_history_new/v1"
 watch_df = load_spark_parquet(base_path, d_date).cache()  
@@ -115,12 +115,6 @@ topics_people_names = [doc["name"] for doc in cursor2]
 print(f"L2 tags with publish_count > 10: {topics_tag_names}")
 print(f"People with publish_count > 0: {len(topics_people_names)}")
 
-
-# l2_tag_names = [doc["name"] for doc in l2_coll.find({"publish_count_contents": {"$gt": 100}}, {"_id":0,"name":1})]
-# l2_tag_names = [doc["name"] for doc in cursor]
-
-# content_df = content_df.filter(F.col("L2Tag").isin(l2_tag_names))
-
 filtered_content_df = content_df.filter(F.col("L2Tag").isin(topics_tag_names))
 filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_people_names))
 # filtered_content_df.show(truncate=False)
@@ -173,7 +167,7 @@ als = ALS(
     regParam=0.08,           
     alpha=20,      
 
-    # Stability & performance
+    # Stability and performance
     coldStartStrategy="drop",
     nonnegative=True,
 
@@ -245,7 +239,7 @@ df_top10 = df_ranked.filter(F.col("rank") <= 10)
 #     F.collect_list("tag").alias("tags")
 # )
 
-# Aggregate tag + score together
+# Aggregate tag and score together
 final_df = df_top10.groupBy("userId").agg(
     F.collect_list(
         F.struct(
@@ -253,21 +247,7 @@ final_df = df_top10.groupBy("userId").agg(
             F.col("tag_score")
         )
     ).alias("tags")
-)
-
-# output_path = f"gs://wynk-ml-workspace/ritika/als_uid_topic_output/{d_date}/"
-
-# (
-#     final_df
-#     .repartition(200)  
-#     .write
-#     .mode("overwrite")
-#     .parquet(output_path)
-# )
-
-# LOAD TAG METADATA FROM MONGO
-
-# tag_meta_coll = db["topics"]   
+) 
 
 tag_cursor = topics_coll.find(
     {},
@@ -294,12 +274,7 @@ tag_meta_df = (
     .withColumn("parent_id", F.col("parent_id").cast("string"))
 )
 
-# # EXPLODE USER TAGS
-
-# user_tags_exploded = final_df.select(
-#     F.col("userId").alias("user_id"),
-#     F.explode("tags").alias("tag_name")
-# )
+# EXPLODE USER TAGS
 user_tags_exploded = final_df.select(
     F.col("userId").alias("user_id"),
     F.explode("tags").alias("tag_data")
@@ -314,11 +289,6 @@ user_tags_exploded = final_df.select(
 final_output_df = (
     user_tags_exploded
     .join(tag_meta_df, on="tag_name", how="left")
-    # .withColumn(
-    #     "type",
-    #     F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
-    #      .otherwise(F.lit("People"))
-    # )
     .withColumn("model", F.lit("ALS"))
     .withColumn("version", F.lit("v1"))
 )
@@ -340,7 +310,7 @@ final_output_df = final_output_df.select(
 
 # WRITE OUTPUT
 
-final_output_path = f"gs://wynk-ml-workspace/ritika/als_uid_topic/{d_date}/"
+final_output_path = f"gs://wynk-ml-workspace/xstream/TopicRecos/als_recos/{d_date}/"
 
 (
     final_output_df
