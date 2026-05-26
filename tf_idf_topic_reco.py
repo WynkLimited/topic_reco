@@ -66,7 +66,7 @@ def load_spark_parquet(base_path, date):
 #     df = spark.read.parquet(*valid_paths)
 #     return df
     
-d_date = subtractDays(2)
+d_date = subtractDays(3)
 
 base_path = "gs://wynk-ml-workspace/projects/rails_reranking/user_watch_history_new/v1"
 watch_df = load_spark_parquet(base_path, d_date).cache()  
@@ -209,11 +209,26 @@ rank_full_df = tfidf_full_df.withColumn("rank", F.row_number().over(window_spec)
 #     .groupBy("uid")
 #     .agg(F.collect_list("L2Tag").alias("recent_tags"))
 # )
+
+# full_topN = (
+#     rank_full_df
+#     .filter(F.col("rank") <= 15)
+#     .groupBy("uid")
+#     .agg(F.collect_list("L2Tag").alias("full_tags"))
+# )
+
 full_topN = (
     rank_full_df
     .filter(F.col("rank") <= 15)
     .groupBy("uid")
-    .agg(F.collect_list("L2Tag").alias("full_tags"))
+    .agg(
+        F.collect_list(
+            F.struct(
+                F.col("L2Tag").alias("tag_name"),
+                F.round(F.col("tfidf"), 4).alias("tag_score")
+            )
+        ).alias("full_tags")
+    )
 )
 
 tf_people_df = (
@@ -261,9 +276,28 @@ combined_tags = (
     #     "final_tags",
     #     F.expr("concat(recent_tags, top5_full, people_tags)")
     # )
+    # .withColumn(
+    #     "final_tags",
+    #     F.expr("concat(top5_full, people_tags)")
+    # )
+
+    # Convert people tags into same struct format
+    .withColumn(
+        "people_struct",
+        F.expr("""
+               transform(
+               people_tags,
+               x -> named_struct(
+                'tag_name', x,
+                'tag_score', cast(1.0 as double)
+               )
+            )
+        """)
+    )
+
     .withColumn(
         "final_tags",
-        F.expr("concat(top5_full, people_tags)")
+        F.expr("concat(top5_full, people_struct)")
     )
     
     .select("uid", "final_tags")
@@ -307,7 +341,7 @@ final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
 
 # print(f" Parquet written to {output_path}")
 
-tag_meta_coll = db["l2_tags_new"]   
+tag_meta_coll = db["l2_tags"]   
 
 tag_cursor = tag_meta_coll.find(
     {},
@@ -334,9 +368,18 @@ tag_meta_df = (
 
 # EXPLODE USER TAGS
 
+# user_tags_exploded = final_df.select(
+#     F.col("uid").alias("user_id"),
+#     F.explode("final_tags").alias("tag_name")
+# )
+
 user_tags_exploded = final_df.select(
     F.col("uid").alias("user_id"),
-    F.explode("final_tags").alias("tag_name")
+    F.explode("final_tags").alias("tag_data")
+).select(
+    "user_id",
+    F.col("tag_data.tag_name").alias("tag_name"),
+    F.col("tag_data.tag_score").alias("tag_score")
 )
 
 # JOIN WITH TAG METADATA
@@ -359,6 +402,7 @@ final_output_df = final_output_df.select(
     "tag_id",
     "user_id",
     "tag_name",
+    "tag_score",
     "type",
     "category",
     "parent_id",

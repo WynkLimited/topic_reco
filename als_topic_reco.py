@@ -52,7 +52,7 @@ def load_spark_parquet(base_path, date):
     df = spark.read.parquet(*valid_paths)
     return df
 
-d_date = subtractDays(2)
+d_date = subtractDays(3)
 
 base_path = "gs://wynk-ml-workspace/projects/rails_reranking/user_watch_history_new/v1"
 watch_df = load_spark_parquet(base_path, d_date).cache()  
@@ -240,9 +240,19 @@ df_ranked = df_top_tags.withColumn("rank", F.row_number().over(window))
 # Keep only top 10 tags per user
 df_top10 = df_ranked.filter(F.col("rank") <= 10)
 
-# Aggregate into list
+# # Aggregate into list
+# final_df = df_top10.groupBy("userId").agg(
+#     F.collect_list("tag").alias("tags")
+# )
+
+# Aggregate tag + score together
 final_df = df_top10.groupBy("userId").agg(
-    F.collect_list("tag").alias("tags")
+    F.collect_list(
+        F.struct(
+            F.col("tag"),
+            F.col("tag_score")
+        )
+    ).alias("tags")
 )
 
 # output_path = f"gs://wynk-ml-workspace/ritika/als_uid_topic_output/{d_date}/"
@@ -257,7 +267,7 @@ final_df = df_top10.groupBy("userId").agg(
 
 # LOAD TAG METADATA FROM MONGO
 
-tag_meta_coll = db["l2_tags_new"]   
+tag_meta_coll = db["l2_tags"]   
 
 tag_cursor = tag_meta_coll.find(
     {},
@@ -282,11 +292,19 @@ tag_meta_df = (
     .withColumnRenamed("name", "tag_name")
 )
 
-# EXPLODE USER TAGS
+# # EXPLODE USER TAGS
 
+# user_tags_exploded = final_df.select(
+#     F.col("userId").alias("user_id"),
+#     F.explode("tags").alias("tag_name")
+# )
 user_tags_exploded = final_df.select(
     F.col("userId").alias("user_id"),
-    F.explode("tags").alias("tag_name")
+    F.explode("tags").alias("tag_data")
+).select(
+    "user_id",
+    F.col("tag_data.tag").alias("tag_name"),
+    F.col("tag_data.tag_score").alias("tag_score")
 )
 
 # JOIN WITH TAG METADATA
@@ -309,6 +327,7 @@ final_output_df = final_output_df.select(
     "tag_id",
     "user_id",
     "tag_name",
+    "tag_score",
     "type",
     "category",
     "parent_id",

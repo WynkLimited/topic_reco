@@ -203,17 +203,44 @@ window_spec = Window.partitionBy("uid").orderBy(F.desc("tfidf"))
 rank_full_df = tfidf_full_df.withColumn("rank", F.row_number().over(window_spec))
 rank_recent_df = tfidf_recent_df.withColumn("rank", F.row_number().over(window_spec))
 
+# recent_top3 = (
+#     rank_recent_df
+#     .filter(F.col("rank") <= 3)
+#     .groupBy("uid")
+#     .agg(F.collect_list("L2Tag").alias("recent_tags"))
+# )
 recent_top3 = (
     rank_recent_df
     .filter(F.col("rank") <= 3)
     .groupBy("uid")
-    .agg(F.collect_list("L2Tag").alias("recent_tags"))
+    .agg(
+        F.collect_list(
+            F.struct(
+                F.col("L2Tag").alias("tag_name"),
+                F.col("tfidf").alias("tag_score")
+            )
+        ).alias("recent_tags")
+    )
 )
+
+# full_topN = (
+#     rank_full_df
+#     .filter(F.col("rank") <= 15)
+#     .groupBy("uid")
+#     .agg(F.collect_list("L2Tag").alias("full_tags"))
+# )
 full_topN = (
     rank_full_df
     .filter(F.col("rank") <= 15)
     .groupBy("uid")
-    .agg(F.collect_list("L2Tag").alias("full_tags"))
+    .agg(
+        F.collect_list(
+            F.struct(
+                F.col("L2Tag").alias("tag_name"),
+                F.col("tfidf").alias("tag_score")
+            )
+        ).alias("full_tags")
+    )
 )
 
 tf_people_df = (
@@ -227,36 +254,92 @@ window_people = Window.partitionBy("uid").orderBy(F.desc("tf"))
 
 rank_people_df = tf_people_df.withColumn("rank", F.row_number().over(window_people))
 
+# top2_people = (
+#     rank_people_df
+#     .filter(F.col("rank") <= 2)
+#     .groupBy("uid")
+#     .agg(F.collect_list("People").alias("people_tags"))
+# )
 top2_people = (
     rank_people_df
     .filter(F.col("rank") <= 2)
     .groupBy("uid")
-    .agg(F.collect_list("People").alias("people_tags"))
+    .agg(
+        F.collect_list(
+            F.struct(
+                F.col("People").alias("tag_name"),
+                F.col("tf").alias("tag_score")
+            )
+        ).alias("people_tags")
+    )
 )
+
+
+# combined_tags = (
+#     full_topN
+#     .join(recent_top3, on="uid", how="left")
+#     .join(top2_people, on="uid", how="left")
+    
+#     # Remove overlap from full tags
+#     .withColumn(
+#         "filtered_full_tags",
+#         F.expr("array_except(full_tags, recent_tags)")
+#     )
+    
+#     # Take top 5 from remaining
+#     .withColumn(
+#         "top5_full",
+#         F.expr("slice(filtered_full_tags, 1, 5)")
+#     )
+    
+#     # Final 10 tags
+#     .withColumn(
+#         "final_tags",
+#         F.expr("concat(recent_tags, top5_full, people_tags)")
+#     )
+    
+#     .select("uid", "final_tags")
+# )
 
 combined_tags = (
     full_topN
     .join(recent_top3, on="uid", how="left")
     .join(top2_people, on="uid", how="left")
-    
-    # Remove overlap from full tags
+
+    # Extract only names for overlap logic
+    .withColumn(
+        "recent_tag_names",
+        F.expr("transform(recent_tags, x -> x.tag_name)")
+    )
+
     .withColumn(
         "filtered_full_tags",
-        F.expr("array_except(full_tags, recent_tags)")
+        F.expr("""
+            filter(
+                full_tags,
+                x -> NOT array_contains(recent_tag_names, x.tag_name)
+            )
+        """)
     )
-    
-    # Take top 5 from remaining
+
+    # Take top 5 remaining
     .withColumn(
         "top5_full",
         F.expr("slice(filtered_full_tags, 1, 5)")
     )
-    
-    # Final 10 tags
+
+    # Final tags
     .withColumn(
         "final_tags",
-        F.expr("concat(recent_tags, top5_full, people_tags)")
+        F.expr("""
+            concat(
+                recent_tags,
+                top5_full,
+                people_tags
+            )
+        """)
     )
-    
+
     .select("uid", "final_tags")
 )
 
@@ -298,7 +381,7 @@ final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
 
 # print(f" Parquet written to {output_path}")
 
-tag_meta_coll = db["l2_tags_new"]   
+tag_meta_coll = db["l2_tags"]   
 
 tag_cursor = tag_meta_coll.find(
     {},
@@ -325,9 +408,17 @@ tag_meta_df = (
 
 # EXPLODE USER TAGS
 
+# user_tags_exploded = final_df.select(
+#     F.col("uid").alias("user_id"),
+#     F.explode("final_tags").alias("tag_name")
+# )
 user_tags_exploded = final_df.select(
     F.col("uid").alias("user_id"),
-    F.explode("final_tags").alias("tag_name")
+    F.explode("final_tags").alias("tag_struct")
+).select(
+    "user_id",
+    F.col("tag_struct.tag_name").alias("tag_name"),
+    F.col("tag_struct.tag_score").alias("tag_score")
 )
 
 # JOIN WITH TAG METADATA
@@ -350,6 +441,7 @@ final_output_df = final_output_df.select(
     "tag_id",
     "user_id",
     "tag_name",
+    "tag_score",
     "type",
     "category",
     "parent_id",
