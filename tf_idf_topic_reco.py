@@ -78,10 +78,10 @@ def extract_l2(df):
 content_df = extract_l2(movie_df).unionByName(extract_l2(tv_df))
 content_df.cache()
 
-mongo_host = "10.161.216.23"
-mongo_port = 27017
-mongo_user = "admin"
-mongo_password = "IAJNSR$:123xyzesqipy"
+mongo_host = spark.conf.get("spark.mongo.host")
+mongo_port = spark.conf.get("spark.mongo.port")
+mongo_user = spark.conf.get("spark.mongo.user")
+mongo_password = spark.conf.get("spark.mongo.password")
 mongo_db = "metadata_db"
 
 def get_mongo_string(mongo_host, mongo_port, mongo_user, mongo_password, mongo_db):
