@@ -310,7 +310,7 @@ final_output_df = final_output_df.select(
 
 # WRITE OUTPUT
 
-final_output_path = f"gs://wynk-ml-workspace/xstream/TopicRecos/als_recos/{d_date}/"
+final_output_path = f"gs://wynk-ml-workspace/projects/neuralflix/user-topic-dump/als_recos/{d_date}/"
 
 (
     final_output_df
