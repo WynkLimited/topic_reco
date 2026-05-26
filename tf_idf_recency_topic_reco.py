@@ -380,7 +380,7 @@ final_output_df = final_output_df.select(
 )
 
 
-final_output_path = f"gs://wynk-ml-workspace/xstream/TopicRecos/tfidf_recency_recos/{d_date}/"
+final_output_path = f"gs://wynk-ml-workspace/projects/neuralflix/user-topic-dump/tfidf_recency_recos/{d_date}/"
 
 (
     final_output_df
