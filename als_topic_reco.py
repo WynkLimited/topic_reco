@@ -100,21 +100,21 @@ db = client[mongo_db]
 topics_coll = db['topics']
 
 cursor = topics_coll.find(
-    {"published_count": {"$gt": 0}},  
-    {"_id": 0, "name": 1}  
+    {"published_count": {"$gt": 10}, "type" : "L2-tag"},  
+    {"name": 1}  
 )
 
-# l2_coll = db['l2_tags_v2']
-
-# cursor = l2_coll.find(
-#     {
-#         "publish_count_contents": {"$gt": 10},
-#         "is_hero_tag": True  # Filters for hero tags only
-#     }, 
-#     {"_id": 0, "name": 1}
-# )
+cursor2 = topics_coll.find(
+    {"type": {"$in": ["Actor", "Director"]}},
+    {"_id": 0, "name": 1}
+)
 
 topics_tag_names = [doc["name"] for doc in cursor]
+topics_people_names = [doc["name"] for doc in cursor2]
+
+print(f"L2 tags with publish_count > 10: {topics_tag_names}")
+print(f"People with publish_count > 0: {len(topics_people_names)}")
+
 
 # l2_tag_names = [doc["name"] for doc in l2_coll.find({"publish_count_contents": {"$gt": 100}}, {"_id":0,"name":1})]
 # l2_tag_names = [doc["name"] for doc in cursor]
@@ -122,7 +122,7 @@ topics_tag_names = [doc["name"] for doc in cursor]
 # content_df = content_df.filter(F.col("L2Tag").isin(l2_tag_names))
 
 filtered_content_df = content_df.filter(F.col("L2Tag").isin(topics_tag_names))
-filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_tag_names))
+filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_people_names))
 # filtered_content_df.show(truncate=False)
 
 meta_df = filtered_content_df.groupBy("ID").agg(
@@ -267,9 +267,9 @@ final_df = df_top10.groupBy("userId").agg(
 
 # LOAD TAG METADATA FROM MONGO
 
-tag_meta_coll = db["l2_tags"]   
+# tag_meta_coll = db["topics"]   
 
-tag_cursor = tag_meta_coll.find(
+tag_cursor = topics_coll.find(
     {},
     {
         "_id": 1,
@@ -290,6 +290,8 @@ tag_meta_df = (
     tag_meta_df
     .withColumnRenamed("_id", "tag_id")
     .withColumnRenamed("name", "tag_name")
+    .withColumn("tag_id", F.col("tag_id").cast("string"))
+    .withColumn("parent_id", F.col("parent_id").cast("string"))
 )
 
 # # EXPLODE USER TAGS
@@ -312,11 +314,11 @@ user_tags_exploded = final_df.select(
 final_output_df = (
     user_tags_exploded
     .join(tag_meta_df, on="tag_name", how="left")
-    .withColumn(
-        "type",
-        F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
-         .otherwise(F.lit("People"))
-    )
+    # .withColumn(
+    #     "type",
+    #     F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
+    #      .otherwise(F.lit("People"))
+    # )
     .withColumn("model", F.lit("ALS"))
     .withColumn("version", F.lit("v1"))
 )

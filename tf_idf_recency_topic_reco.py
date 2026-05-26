@@ -3,6 +3,7 @@ from pyspark.sql.utils import AnalysisException
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from datetime import date, datetime, timedelta
+from pyspark.sql.types import StringType
 
 from pymongo import MongoClient
 from urllib.parse import quote_plus
@@ -66,7 +67,7 @@ def load_spark_parquet_recent(base_path, date):
     df = spark.read.parquet(*valid_paths)
     return df
     
-d_date = subtractDays(2)
+d_date = subtractDays(3)
 
 base_path = "gs://wynk-ml-workspace/projects/rails_reranking/user_watch_history_new/v1"
 watch_df = load_spark_parquet(base_path, d_date).cache()  
@@ -125,15 +126,24 @@ db = client[mongo_db]
 topics_coll = db['topics']
 
 cursor = topics_coll.find(
-    {"published_count": {"$gt": 10}},  
-    {"_id": 0, "name": 1}  
+    {"published_count": {"$gt": 10}, "type" : "L2-tag"},  
+    {"name": 1}  
+)
+
+cursor2 = topics_coll.find(
+    {"type": {"$in": ["Actor", "Director"]}},
+    {"_id": 0, "name": 1}
 )
 
 topics_tag_names = [doc["name"] for doc in cursor]
+topics_people_names = [doc["name"] for doc in cursor2]
+
+print(f"L2 tags with publish_count > 10: {topics_tag_names}")
+print(f"People with publish_count > 0: {len(topics_people_names)}")
 
 # filtered_content_df = content_df.filter(F.col("L2Tag").isin(l2_tag_names))
 filtered_content_df = content_df.filter(F.col("L2Tag").isin(topics_tag_names))
-filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_tag_names))
+filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_people_names))
 # filtered_content_df.show(truncate=False)
 
 fs = gcsfs.GCSFileSystem()
@@ -369,6 +379,19 @@ final_df = user_meta_df.join(combined_tags, on="uid", how="left")
 
 final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
 
+print("watch_df:", watch_df.count())
+print("user_items_full_df:", user_items_full_df.count())
+print("content_df:", content_df.count())
+print("filtered_content_df:", filtered_content_df.count())
+print("user_content_full_df:", user_content_full_df.count())
+print("tf_full_df:", tf_full_df.count())
+print("final_df:", final_df.count())
+
+final_df.select(
+    F.count("*"),
+    F.sum(F.when(F.col("final_tags").isNull(), 1).otherwise(0))
+).show()
+
 # output_path = f"gs://wynk-ml-workspace/ritika/uid_topic_output/{d_date}/"
 
 # (
@@ -381,7 +404,7 @@ final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
 
 # print(f" Parquet written to {output_path}")
 
-tag_meta_coll = db["l2_tags"]   
+tag_meta_coll = db["topics"]   
 
 tag_cursor = tag_meta_coll.find(
     {},
@@ -404,6 +427,8 @@ tag_meta_df = (
     tag_meta_df
     .withColumnRenamed("_id", "tag_id")
     .withColumnRenamed("name", "tag_name")
+    .withColumn("tag_id", F.col("tag_id").cast("string"))
+    .withColumn("parent_id", F.col("parent_id").cast("string"))
 )
 
 # EXPLODE USER TAGS
@@ -423,14 +448,16 @@ user_tags_exploded = final_df.select(
 
 # JOIN WITH TAG METADATA
 
+# final_output_df = (
+#     user_tags_exploded
+#     .join(tag_meta_df, on="tag_name", how="left")
+#     .withColumn("model", F.lit("Recency TF-IDF"))
+#     .withColumn("version", F.lit("v1"))
+# )
+
 final_output_df = (
     user_tags_exploded
     .join(tag_meta_df, on="tag_name", how="left")
-    .withColumn(
-        "type",
-        F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
-         .otherwise(F.lit("People"))
-    )
     .withColumn("model", F.lit("Recency TF-IDF"))
     .withColumn("version", F.lit("v1"))
 )

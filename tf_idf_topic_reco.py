@@ -125,15 +125,24 @@ db = client[mongo_db]
 topics_coll = db['topics']
 
 cursor = topics_coll.find(
-    {"published_count": {"$gt": 10}},  
-    {"_id": 0, "name": 1}  
+    {"published_count": {"$gt": 10}, "type" : "L2-tag"},  
+    {"name": 1}  
+)
+
+cursor2 = topics_coll.find(
+    {"type": {"$in": ["Actor", "Director"]}},
+    {"_id": 0, "name": 1}
 )
 
 topics_tag_names = [doc["name"] for doc in cursor]
+topics_people_names = [doc["name"] for doc in cursor2]
+
+print(f"L2 tags with publish_count > 10: {len(topics_tag_names)}")
+print(f"People with publish_count > 0: {len(topics_people_names)}")
 
 # filtered_content_df = content_df.filter(F.col("L2Tag").isin(l2_tag_names))
 filtered_content_df = content_df.filter(F.col("L2Tag").isin(topics_tag_names))
-filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_tag_names))
+filtered_content_df = filtered_content_df.filter(F.col("People").isin(topics_people_names))
 # filtered_content_df.show(truncate=False)
 
 fs = gcsfs.GCSFileSystem()
@@ -341,9 +350,9 @@ final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
 
 # print(f" Parquet written to {output_path}")
 
-tag_meta_coll = db["l2_tags"]   
+# tag_meta_coll = db["l2_tags"]   
 
-tag_cursor = tag_meta_coll.find(
+tag_cursor = topics_coll.find(
     {},
     {
         "_id": 1,
@@ -364,6 +373,8 @@ tag_meta_df = (
     tag_meta_df
     .withColumnRenamed("_id", "tag_id")
     .withColumnRenamed("name", "tag_name")
+    .withColumn("tag_id", F.col("tag_id").cast("string"))
+    .withColumn("parent_id", F.col("parent_id").cast("string"))
 )
 
 # EXPLODE USER TAGS
@@ -387,11 +398,11 @@ user_tags_exploded = final_df.select(
 final_output_df = (
     user_tags_exploded
     .join(tag_meta_df, on="tag_name", how="left")
-    .withColumn(
-        "type",
-        F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
-         .otherwise(F.lit("People"))
-    )
+    # .withColumn(
+    #     "type",
+    #     F.when(F.col("tag_id").isNotNull(), F.lit("L2-tag"))
+    #      .otherwise(F.lit("People"))
+    # )
     .withColumn("model", F.lit("TF-IDF"))
     .withColumn("version", F.lit("v1"))
 )
