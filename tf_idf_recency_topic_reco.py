@@ -13,7 +13,7 @@ import gcsfs
 def get_spark():
     return (
         SparkSession.builder
-        .appName("TF-IDF Topic Reco")
+        .appName("TF-IDF Recency Topic Reco")
         .getOrCreate()
     )
 
@@ -208,7 +208,8 @@ recent_top3 = (
         F.collect_list(
             F.struct(
                 F.col("L2Tag").alias("tag_name"),
-                F.col("tfidf").alias("tag_score")
+                # F.col("tfidf").alias("tag_score")
+                F.round(F.col("tfidf"), 4).alias("tag_score")
             )
         ).alias("recent_tags")
     )
@@ -222,7 +223,8 @@ full_topN = (
         F.collect_list(
             F.struct(
                 F.col("L2Tag").alias("tag_name"),
-                F.col("tfidf").alias("tag_score")
+                # F.col("tfidf").alias("tag_score")
+                F.round(F.col("tfidf"), 4).alias("tag_score")
             )
         ).alias("full_tags")
     )
@@ -307,18 +309,18 @@ final_df = user_meta_df.join(combined_tags, on="uid", how="left")
 
 final_df = final_df.filter(F.size(F.col("nf_ids")) >= 2)
 
-print("watch_df:", watch_df.count())
-print("user_items_full_df:", user_items_full_df.count())
-print("content_df:", content_df.count())
-print("filtered_content_df:", filtered_content_df.count())
-print("user_content_full_df:", user_content_full_df.count())
-print("tf_full_df:", tf_full_df.count())
-print("final_df:", final_df.count())
+# print("watch_df:", watch_df.count())
+# print("user_items_full_df:", user_items_full_df.count())
+# print("content_df:", content_df.count())
+# print("filtered_content_df:", filtered_content_df.count())
+# print("user_content_full_df:", user_content_full_df.count())
+# print("tf_full_df:", tf_full_df.count())
+# print("final_df:", final_df.count())
 
-final_df.select(
-    F.count("*"),
-    F.sum(F.when(F.col("final_tags").isNull(), 1).otherwise(0))
-).show()
+# final_df.select(
+#     F.count("*"),
+#     F.sum(F.when(F.col("final_tags").isNull(), 1).otherwise(0))
+# ).show()
 
 tag_meta_coll = db["topics"]   
 

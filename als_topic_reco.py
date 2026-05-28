@@ -112,7 +112,7 @@ cursor2 = topics_coll.find(
 topics_tag_names = [doc["name"] for doc in cursor]
 topics_people_names = [doc["name"] for doc in cursor2]
 
-print(f"L2 tags with publish_count > 10: {topics_tag_names}")
+print(f"L2 tags with publish_count > 10: {len(topics_tag_names)}")
 print(f"People with publish_count > 0: {len(topics_people_names)}")
 
 filtered_content_df = content_df.filter(F.col("L2Tag").isin(topics_tag_names))
@@ -222,6 +222,11 @@ df_top_tags = df_top_l2.unionByName(df_top_people)
 user_mapping = df_indexed.select("user_index", "userId").dropDuplicates()
 df_top_tags = df_top_tags.join(user_mapping, "user_index", "left")
 
+df_top_tags_randomized = df_top_tags.withColumn(
+    "tag_score",
+    F.col("tag_score") + (F.rand() * 0.09 + 0.01)
+)
+
 final_user_tags = df_top_tags.select(
     "userId", "tag", "tag_score"
 ).orderBy("userId", "tag_score", ascending=False)
@@ -244,7 +249,8 @@ final_df = df_top10.groupBy("userId").agg(
     F.collect_list(
         F.struct(
             F.col("tag"),
-            F.col("tag_score")
+            # F.col("tag_score")
+            F.round(F.col("tag_score"), 4).alias("tag_score")
         )
     ).alias("tags")
 ) 
